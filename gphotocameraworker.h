@@ -48,6 +48,15 @@ private:
     void openCameraErrorHandle(const QString &errorText);
     void logOption(const char* name);
     void waitForOperationCompleted();
+
+    /** Waits for the next event to arrive and deliver event data.
+     *
+     * @param wait_msec max time to wait in msecs
+     * @param eventData If the event produced data, this holds the returned event data.
+     * @return the event which occured.
+     */
+    CameraEventType waitForNextEvent(int wait_msec, QString *eventData);
+
     void setStatus(QCamera::Status status);
 };
 

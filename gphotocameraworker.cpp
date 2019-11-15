@@ -487,14 +487,63 @@ void GPhotoCameraWorker::logOption(const char *name)
 
 void GPhotoCameraWorker::waitForOperationCompleted()
 {
-    CameraEventType type;
-    void *data;
-    int ret;
+    CameraEventType type{GP_EVENT_UNKNOWN};
+    QString data;
 
     do {
-        ret = gp_camera_wait_for_event(m_camera, 10, &type, &data, m_context);
-        free(data);
-    } while ((ret == GP_OK) && (type != GP_EVENT_TIMEOUT));
+        type = waitForNextEvent(10, &data);
+    } while ((type== GP_OK) && (type != GP_EVENT_TIMEOUT) && (type != GP_EVENT_UNKNOWN));
+}
+
+
+CameraEventType GPhotoCameraWorker::waitForNextEvent(int wait_msec, QString *eventData)
+{
+    void *data=nullptr;
+    CameraEventType type{GP_EVENT_UNKNOWN};
+    eventData->clear();
+
+    int ret = gp_camera_wait_for_event(m_camera, wait_msec, &type, &data, m_context);
+    if (ret != GP_OK)
+    { // according to implementation of gp_camera_wait_for_event();
+        // if i dont get OK, no event type & data is updated.
+        return type;
+    }
+    if(data)
+    { // if we have data, it depends on the event type whats inside...
+        switch(type) {
+            case GP_EVENT_UNKNOWN:   /**< unknown and unhandled event. argument is a char* or NULL */
+            {
+                *eventData=QString::fromLatin1(reinterpret_cast<char*>(data));
+                break;
+            }
+            case GP_EVENT_TIMEOUT:   /**< timeout, no arguments */
+            {
+                assert(false); // should not occur, since violates gphoto doc.
+                break;
+            }
+            case GP_EVENT_FILE_ADDED:    /**< CameraFilePath* = file path on camfs */
+            case GP_EVENT_FILE_CHANGED:   /**< CameraFilePath* = file path on camfs */
+            {
+                auto *file = reinterpret_cast<CameraFilePath*>(data);
+                *eventData=QString::fromLatin1(file->folder) + "/" + QString(file->name);
+                break;
+            }
+            case GP_EVENT_FOLDER_ADDED:  /**< CameraFilePath* = folder on camfs */
+            {
+                auto *folder= reinterpret_cast<CameraFilePath*>(data);
+                *eventData=QString::fromLatin1(folder->folder);
+                break;
+            }
+            case GP_EVENT_CAPTURE_COMPLETE:  /**< last capture is complete */
+            {
+                assert(false); // should not occur, since violates gphoto doc.
+                break;
+            }
+        }
+    }
+    free(data);
+
+    return type;
 }
 
 void GPhotoCameraWorker::setStatus(QCamera::Status status)
