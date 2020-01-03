@@ -196,39 +196,71 @@ void GPhotoCameraWorker::capturePhoto(int id, const QString &fileName)
     }
 
     // Capture the frame from camera
-    CameraFilePath filePath;
-    int ret = gp_camera_capture(m_camera, GP_CAPTURE_IMAGE, &filePath, m_context);
+    // See https://github.com/gphoto/libgphoto2/issues/156 for RAW+JPEG fix
 
+    //int ret = gp_camera_capture(m_camera, GP_CAPTURE_IMAGE, &filePath, m_context);
+
+    int ret = gp_camera_trigger_capture(m_camera,m_context);
     if (ret < GP_OK) {
         qWarning() << "Failed to capture frame:" << ret;
         emit imageCaptureError(id, QCameraImageCapture::ResourceError, "Failed to capture frame");
-    } else {
-        qDebug() << "Captured frame:" << filePath.folder << filePath.name;
+        return;
+    }
 
-        // Download the file
-        CameraFile* file;
-        ret = gp_file_new(&file);
-        ret = gp_camera_file_get(m_camera, filePath.folder, filePath.name, GP_FILE_TYPE_NORMAL, file, m_context);
+    CameraEvent evt;
+    bool done=false;
 
-        if (ret < GP_OK) {
-            qWarning() << "Failed to get file from camera:" << ret;
-            emit imageCaptureError(id, QCameraImageCapture::ResourceError, "Failed to download file from camera");
-        } else {
-            const char* data;
-            unsigned long int size = 0;
+    do {
+        evt=waitForNextEvent(1000); // todo: How long to wait for long exposures?
 
-            ret = gp_file_get_data_and_size(file, &data, &size);
-            if (ret < GP_OK) {
-                qWarning() << "Failed to get file data and size from camera:" << ret;
-                emit imageCaptureError(id, QCameraImageCapture::ResourceError, "Failed to download file from camera");
-            } else {
-                emit imageCaptured(id, QByteArray(data, int(size)), fileName);
+        switch(evt.event)
+        {
+            case GP_EVENT_FILE_ADDED:
+            {
+                qDebug() << "file added event:" << evt.folderName << "/" <<  evt.fileName;
+
+                if(evt.fileName.endsWith("jpg",Qt::CaseInsensitive))
+                {
+                    // Download the file
+                    CameraFile* file;
+                    ret = gp_file_new(&file);
+                    ret = gp_camera_file_get(m_camera, evt.folderName.toLatin1(), evt.fileName.toLatin1(), GP_FILE_TYPE_NORMAL, file, m_context);
+
+                    if (ret < GP_OK) {
+                        qWarning() << "Failed to get file from camera:" << ret;
+                        emit imageCaptureError(id, QCameraImageCapture::ResourceError, "Failed to download file from camera");
+                    } else {
+                        const char* data;
+                        unsigned long int size = 0;
+
+                        ret = gp_file_get_data_and_size(file, &data, &size);
+                        if (ret < GP_OK) {
+                            qWarning() << "Failed to get file data and size from camera:" << ret;
+                            emit imageCaptureError(id, QCameraImageCapture::ResourceError, "Failed to download file from camera");
+                        } else {
+                            emit imageCaptured(id, QByteArray(data, int(size)), fileName);
+                        }
+                    }
+                    gp_file_free(file);
+                }
             }
+            break;
+            case GP_EVENT_FOLDER_ADDED:
+            case GP_EVENT_FILE_CHANGED:
+            case GP_EVENT_UNKNOWN:
+                // ignored
+                break;
+            case GP_EVENT_TIMEOUT:
+            case GP_EVENT_CAPTURE_COMPLETE:
+            {
+                done=true;
+            }
+
         }
 
-        gp_file_free(file);
-        waitForOperationCompleted();
-    }
+        // waitForOperationCompleted();
+    } while(!done);
+
 
     if (parameter("viewfinder").isValid()) {
         if (!setParameter("viewfinder", true))
@@ -487,33 +519,33 @@ void GPhotoCameraWorker::logOption(const char *name)
 
 void GPhotoCameraWorker::waitForOperationCompleted()
 {
-    CameraEventType type{GP_EVENT_UNKNOWN};
-    QString data;
-
+    CameraEvent type;
     do {
-        type = waitForNextEvent(10, &data);
-    } while ((type== GP_OK) && (type != GP_EVENT_TIMEOUT) && (type != GP_EVENT_UNKNOWN));
+        type = waitForNextEvent(1000);
+    } while ((type.event != GP_EVENT_TIMEOUT) && (type.event != GP_EVENT_UNKNOWN));
 }
 
 
-CameraEventType GPhotoCameraWorker::waitForNextEvent(int wait_msec, QString *eventData)
+GPhotoCameraWorker::CameraEvent GPhotoCameraWorker::waitForNextEvent(int wait_msec)
 {
+    CameraEvent evt;
     void *data=nullptr;
-    CameraEventType type{GP_EVENT_UNKNOWN};
-    eventData->clear();
+    CameraEventType evt_type{GP_EVENT_UNKNOWN};
 
-    int ret = gp_camera_wait_for_event(m_camera, wait_msec, &type, &data, m_context);
+    int ret = gp_camera_wait_for_event(m_camera, wait_msec, &evt_type, &data, m_context);
+    evt.event = evt_type;
     if (ret != GP_OK)
     { // according to implementation of gp_camera_wait_for_event();
         // if i dont get OK, no event type & data is updated.
-        return type;
+        evt.event = GP_EVENT_UNKNOWN;
+        return evt;
     }
     if(data)
     { // if we have data, it depends on the event type whats inside...
-        switch(type) {
+        switch(evt_type) {
             case GP_EVENT_UNKNOWN:   /**< unknown and unhandled event. argument is a char* or NULL */
             {
-                *eventData=QString::fromLatin1(reinterpret_cast<char*>(data));
+                evt.eventInfo=QString::fromLatin1(reinterpret_cast<char*>(data));
                 break;
             }
             case GP_EVENT_TIMEOUT:   /**< timeout, no arguments */
@@ -525,13 +557,14 @@ CameraEventType GPhotoCameraWorker::waitForNextEvent(int wait_msec, QString *eve
             case GP_EVENT_FILE_CHANGED:   /**< CameraFilePath* = file path on camfs */
             {
                 auto *file = reinterpret_cast<CameraFilePath*>(data);
-                *eventData=QString::fromLatin1(file->folder) + "/" + QString(file->name);
+                evt.folderName = QString::fromLatin1(file->folder);
+                evt.fileName = QString(file->name);
                 break;
             }
             case GP_EVENT_FOLDER_ADDED:  /**< CameraFilePath* = folder on camfs */
             {
                 auto *folder= reinterpret_cast<CameraFilePath*>(data);
-                *eventData=QString::fromLatin1(folder->folder);
+                evt.folderName = QString::fromLatin1(folder->folder);
                 break;
             }
             case GP_EVENT_CAPTURE_COMPLETE:  /**< last capture is complete */
@@ -542,8 +575,8 @@ CameraEventType GPhotoCameraWorker::waitForNextEvent(int wait_msec, QString *eve
         }
     }
     free(data);
-
-    return type;
+    // qDebug() << "Got evt:" << evt.event << "info" << evt.eventInfo << " " << evt.fileName << " " << evt.folderName;
+    return evt;
 }
 
 void GPhotoCameraWorker::setStatus(QCamera::Status status)

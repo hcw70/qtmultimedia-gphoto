@@ -11,6 +11,23 @@ class GPhotoCameraWorker : public QObject
 {
     Q_OBJECT
 public:
+
+    /** Data forming a camera event from libGPhoto
+     * packed into a nicer C++ object.
+     *
+     * This struct is returned from waitForNextEvent().
+     */
+    struct CameraEvent {
+        /// What happened
+        CameraEventType event{GP_EVENT_UNKNOWN};
+        /// For some events we get a folder / file info
+        QString folderName;
+        /// For some events we get a folder / file info
+        QString fileName;
+        /// For some events we get a message
+        QString eventInfo;
+    };
+
     GPhotoCameraWorker(const CameraAbilities &abilities, const PortInfo &portInfo, QObject *parent = 0);
     ~GPhotoCameraWorker();
 
@@ -52,10 +69,9 @@ private:
     /** Waits for the next event to arrive and deliver event data.
      *
      * @param wait_msec max time to wait in msecs
-     * @param eventData If the event produced data, this holds the returned event data.
      * @return the event which occured.
      */
-    CameraEventType waitForNextEvent(int wait_msec, QString *eventData);
+    CameraEvent waitForNextEvent(int wait_msec);
 
     void setStatus(QCamera::Status status);
 };
