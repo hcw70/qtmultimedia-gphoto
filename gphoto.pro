@@ -2,7 +2,7 @@ TARGET = gphoto
 
 QT       += core gui multimedia
 TEMPLATE =  lib
-CONFIG   += plugin
+CONFIG   += plugin console
 
 PLUGIN_TYPE=mediaservice
 PLUGIN_CLASS_NAME=GPhotoServicePlugin
