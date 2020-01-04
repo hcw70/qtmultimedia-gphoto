@@ -7,6 +7,8 @@
 #include <QThread>
 #include <QStandardPaths>
 #include <QFile>
+#include <QFileInfo>
+#include <QImageReader>
 
 GPhotoCameraSession::GPhotoCameraSession(GPhotoFactory *factory, QObject *parent)
     : QObject(parent)
@@ -214,27 +216,41 @@ void GPhotoCameraSession::previewCaptured(const QImage &image)
 
 void GPhotoCameraSession::imageDataCaptured(int id, const QByteArray &imageData, const QString &fileName)
 {
-    QImage image = QImage::fromData(imageData);
+    // QImageReader::imageFormat(fileName); does not work here: Gives "tiff" for "cr2" ...
+    QString fmt = QFileInfo(fileName).suffix();
+    if (!fmt.startsWith("jpeg",Qt::CaseInsensitive) &&
+           !fmt.startsWith("jpg",Qt::CaseInsensitive) )
     {
-        QSize previewSize = image.size();
-        int downScaleSteps = 0;
-        while (previewSize.width() > 800 && downScaleSteps < 8) {
-            previewSize.rwidth() /= 2;
-            previewSize.rheight() /= 2;
-            downScaleSteps++;
-        }
-
-        const QImage &snapPreview = image.scaled(previewSize);
-        emit imageCaptured(id, snapPreview);
+        fmt.clear();
     }
 
-    if (m_captureDestination & QCameraImageCapture::CaptureToBuffer) {
-        QVideoFrame frame(image);
-        emit imageAvailable(id, frame);
+    if(!fmt.isEmpty())
+    {
+        QImage image = QImage::fromData(imageData,qPrintable(fmt));
+        if (! image.isNull() )
+        {
+            QSize previewSize = image.size();
+            int downScaleSteps = 0;
+            while (previewSize.width() > 800 && downScaleSteps < 8) {
+                previewSize.rwidth() /= 2;
+                previewSize.rheight() /= 2;
+                downScaleSteps++;
+            }
+
+            const QImage &snapPreview = image.scaled(previewSize);
+            emit imageCaptured(id, snapPreview);
+
+            if (m_captureDestination & QCameraImageCapture::CaptureToBuffer) {
+                QVideoFrame frame(image);
+                emit imageAvailable(id, frame);
+            }
+        }
     }
 
     if (m_captureDestination & QCameraImageCapture::CaptureToFile) {
+        QString fileExt = QFileInfo(fileName).suffix();
         QString actualFileName(fileName);
+
         if (actualFileName.isEmpty()) {
             QString dir = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
             if (dir.isEmpty()) {
@@ -243,7 +259,7 @@ void GPhotoCameraSession::imageDataCaptured(int id, const QByteArray &imageData,
                 return;
             }
 
-            dir += "/DCIM%1.jpg";
+            dir += "/DCIM%1." + fileExt;
             // Trying to find free filename
             for (int i = 0; i < 9999; ++i) {
                 QString f = dir.arg(i, 4, 10, QChar('0'));
