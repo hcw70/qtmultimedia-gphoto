@@ -1,6 +1,7 @@
 #include "gphotocameraworker.h"
 
 #include <QCameraImageCapture>
+#include <QFileInfo>
 
 namespace {
   const int capturingFailLimit = 10;
@@ -219,46 +220,57 @@ void GPhotoCameraWorker::capturePhoto(int id, const QString &fileName)
             {
                 qDebug() << "file added event:" << evt.folderName << "/" <<  evt.fileName;
 
-                if(evt.fileName.endsWith("jpg",Qt::CaseInsensitive))
-                {
-                    // Download the file
-                    CameraFile* file;
-                    ret = gp_file_new(&file);
-                    ret = gp_camera_file_get(m_camera, evt.folderName.toLatin1(), evt.fileName.toLatin1(), GP_FILE_TYPE_NORMAL, file, m_context);
+                // Download the file
+                CameraFile* file;
+                ret = gp_file_new(&file);
+                ret = gp_camera_file_get(m_camera, evt.folderName.toLatin1(), evt.fileName.toLatin1(), GP_FILE_TYPE_NORMAL, file, m_context);
 
+                if (ret < GP_OK) {
+                    qWarning() << "Failed to get file from camera:" << ret;
+                    emit imageCaptureError(id, QCameraImageCapture::ResourceError, "Failed to download file from camera");
+                } else {
+                    const char* data;
+                    unsigned long int size = 0;
+
+                    ret = gp_file_get_data_and_size(file, &data, &size);
                     if (ret < GP_OK) {
-                        qWarning() << "Failed to get file from camera:" << ret;
+                        qWarning() << "Failed to get file data and size from camera:" << ret;
                         emit imageCaptureError(id, QCameraImageCapture::ResourceError, "Failed to download file from camera");
                     } else {
-                        const char* data;
-                        unsigned long int size = 0;
-
-                        ret = gp_file_get_data_and_size(file, &data, &size);
-                        if (ret < GP_OK) {
-                            qWarning() << "Failed to get file data and size from camera:" << ret;
-                            emit imageCaptureError(id, QCameraImageCapture::ResourceError, "Failed to download file from camera");
-                        } else {
-                            emit imageCaptured(id, QByteArray(data, int(size)), fileName);
+                        if(fileName.isEmpty())
+                        { // no proposal file name
+                            emit imageCaptured(id, QByteArray(data, int(size)), evt.fileName);
+                        }
+                        else
+                        {
+                            QFileInfo fInfo(fileName);
+                            QFileInfo evtfInfo(evt.fileName);
+                            if(fInfo.suffix()==evtfInfo.suffix())
+                            { // extension matches, so use proposed name:
+                                emit imageCaptured(id, QByteArray(data, int(size)), fileName);
+                            }
+                            else
+                            { // other extension, so use evt name
+                                emit imageCaptured(id, QByteArray(data, int(size)), evt.fileName);
+                            }
                         }
                     }
-                    gp_file_free(file);
                 }
+                gp_file_free(file);
             }
             break;
             case GP_EVENT_FOLDER_ADDED:
             case GP_EVENT_FILE_CHANGED:
+            case GP_EVENT_TIMEOUT:
             case GP_EVENT_UNKNOWN:
                 // ignored
                 break;
-            case GP_EVENT_TIMEOUT:
             case GP_EVENT_CAPTURE_COMPLETE:
             {
                 done=true;
             }
 
         }
-
-        // waitForOperationCompleted();
     } while(!done);
 
 
@@ -575,7 +587,7 @@ GPhotoCameraWorker::CameraEvent GPhotoCameraWorker::waitForNextEvent(int wait_ms
         }
     }
     free(data);
-    // qDebug() << "Got evt:" << evt.event << "info" << evt.eventInfo << " " << evt.fileName << " " << evt.folderName;
+    qDebug() << "Got evt:" << evt.event << "info" << evt.eventInfo << " " << evt.fileName << " " << evt.folderName;
     return evt;
 }
 
